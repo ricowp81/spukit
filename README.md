@@ -1,0 +1,121 @@
+# spukit
+
+Trabajos por lotes en los SPEs de la PlayStation 3 con
+[PSL1GHT](https://github.com/ps3dev/PSL1GHT). Nació dentro de Salsa64 (un
+emulador de N64), pero no sabe nada de ningún sistema emulado: sirve a
+cualquier programa homebrew que quiera mandar trabajo grande a un SPE una
+vez por cuadro (una lista de comandos, un búfer de audio, un filtro) sin
+diálogos finos con el PPE. Licencia **MIT** (`LICENSE`), como `lib/rsxkit`,
+para que también la puedan usar proyectos que no son GPL.
+
+## Modelo
+
+- Un **trabajador** es un hilo SPU persistente en su propio grupo (ocupa un
+  SPE mientras vive). Duerme en su mailbox de entrada.
+- El PPE **publica** trabajos en una cola en memoria principal: un
+  descriptor de 128 bytes (`kind` y hasta 112 bytes de parámetros, que
+  normalmente son direcciones de búferes) y un **timbre** (escribir en la
+  mailbox del SPU). Publicar no espera al SPU.
+- El SPU atiende todo lo publicado, en orden, y por cada trabajo escribe un
+  resultado de 128 bytes (código de error, duración en ticks del
+  decrementador y hasta 112 bytes propios) y después el número del último
+  trabajo terminado. Antes de eso espera todas sus transferencias DMA: lo
+  que el trabajo escribió en memoria principal es visible para el PPE en
+  cuanto ve el trabajo como terminado.
+- El PPE consulta (`spukit_done`) o espera (`spukit_wait`) cuando necesita
+  el resultado.
+
+La cola tiene `SPUKIT_QUEUE_LEN` (8) lugares; si está llena, `spukit_post`
+espera a que se libere uno. El resultado de un trabajo vale hasta que se
+publiquen 8 más en el mismo trabajador.
+
+Cada publicación toca el timbre (una llamada al sistema). Un timbre de más
+solo despierta al SPU para encontrar la cola vacía; uno perdido (mailbox
+llena) no importa, porque los que ya esperan en la mailbox lo despiertan y
+el SPU siempre relee la cola completa.
+
+## Compilar
+
+```bash
+make                    # → build/libspukit.a (lado PPE)
+make OUT=/otra/ruta
+```
+
+El lado SPU es solo cabecera. Para usarla: `-I<spukit>/include` en el PPE
+y en el SPU, y enlazar `libspukit.a` en el PPE antes de `-llv2`.
+
+## Uso
+
+PPE:
+
+```c
+#include <spukit/spukit.h>
+#include "spu_prog_bin.h"          /* la imagen ELF del SPU, embebida */
+
+spukit_init(6);
+spukit_worker *w = spukit_worker_start(spu_prog_bin, "mi_trabajo", arg);
+
+struct params p = { .src = (uintptr_t)src, .dst = (uintptr_t)dst, .n = n };
+uint32_t seq = spukit_post(w, MI_TRABAJO, &p, sizeof p);
+/* ... el PPE hace otra cosa ... */
+const spukit_result *r = spukit_wait(w, seq);   /* r->error, r->ticks, r->data */
+
+spukit_worker_stop(w);
+```
+
+SPU:
+
+```c
+#include <spukit/spu.h>
+#include <sys/spu_thread.h>
+
+static int handler(void *ctx, const spukit_job *job, spukit_result *res)
+{
+	const struct params *p = (const void *)job->data;
+	/* DMA de entrada, cálculo, DMA de salida (etiquetas 0–30) */
+	return 0;  /* → res->error */
+}
+
+int main(uint64_t ctrl_ea, uint64_t arg, uint64_t a2, uint64_t a3)
+{
+	spukit_run(ctrl_ea, handler, NULL);
+	spu_thread_exit(0);
+	return 0;
+}
+```
+
+## API (PPE)
+
+| Función | Qué hace |
+|---|---|
+| `int spukit_init(uint32_t spus)` | Reserva `spus` SPEs para hilos SPU (`sysSpuInitialize`). Una vez por proceso. |
+| `spukit_worker *spukit_worker_start(elf, name, arg)` | Crea un grupo de un hilo con la imagen ELF embebida y lo arranca; el programa recibe `main(ctrl_ea, arg, 0, 0)`. `NULL` si falla (`spukit_last_error`). Hasta 6 trabajadores. |
+| `uint32_t spukit_post(w, kind, data, size)` | Publica un trabajo y toca el timbre; devuelve su número (desde 1). |
+| `int spukit_done(w, seq)` | ¿Terminó? No bloquea. |
+| `const spukit_result *spukit_wait(w, seq)` | Espera y devuelve el resultado: gira ~50 µs con prioridad baja del hilo de hardware (deja el núcleo al otro hilo del PPE) y después duerme de a 20 µs. |
+| `int spukit_worker_stop(w)` | Pide salir al vaciar la cola, espera al hilo y libera todo; devuelve su estado de salida. |
+| `void spukit_get_stats(w, out)` | Publicados, timbres, despertares del SPU, esperas y tiempo esperando. |
+| `uint64_t spukit_tick_hz(void)` | Frecuencia de los ticks de `spukit_result` (timebase: 79,8 MHz en la PS3). |
+
+## API (SPU, `spukit/spu.h`)
+
+| Función | Qué hace |
+|---|---|
+| `spukit_run(ctrl_ea, handler, ctx)` | Bucle del trabajador; vuelve cuando el PPE pide salir. |
+| `spukit_dma_get / spukit_dma_put(ls, ea, size, tag)` | DMA de cualquier tamaño múltiplo de 16 (en trozos de 16 KB). No espera. |
+| `spukit_dma_wait(tag_mask)` | Espera las etiquetas. |
+| `spukit_get_unaligned(buf, ea, size, tag)` | Trae `size` bytes desde una dirección no alineada (copia el tramo alineado a 16 en `buf`, de `size + 32` bytes) y devuelve el puntero al primer byte. |
+| `spukit_ticks()` | Decrementador (cuenta hacia abajo). |
+
+La etiqueta DMA 31 es del bucle; el manejador usa las demás.
+
+## Recursos que usa
+
+- Un grupo de hilos SPU de un hilo por trabajador (prioridad 100).
+- Por trabajador, ~2,3 KB de memoria principal (bloque de control) y
+  ~0,5 KB de local store (descriptor, resultado, cabeza y estado).
+
+## Origen del código
+
+Código propio. Usa solo la API de PSL1GHT (MIT). No contiene código de
+proyectos GPL ni de proyectos sin licencia clara.

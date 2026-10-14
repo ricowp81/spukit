@@ -109,6 +109,35 @@ int main(uint64_t ctrl_ea, uint64_t arg, uint64_t a2, uint64_t a3)
 
 La etiqueta DMA 31 es del bucle; el manejador usa las demás.
 
+## Compresión LZ (`spukit/lz.h`, `lzstream.h`)
+
+Una pieza aparte que se apoya en lo anterior: compresión sin pérdida de
+bloques de 64 KB en el formato de bloque de LZ4 (cualquier descompresor de
+LZ4 los lee). Sirve para escribir a disco grandes zonas de memoria (estados
+guardados de un emulador, cachés) sin cargar el PPE.
+
+- `spukit/lz.h` (solo cabecera, C99): `spukit_lz_compress` y
+  `spukit_lz_decompress` para un bloque, y `spukit_lz_frame*` para el
+  encabezado de 4 bytes de cada bloque en un archivo (bit 31: va sin
+  comprimir). El mismo código corre en el PPE, en un SPE y en el host, y da
+  los mismos bytes. Cada bloque es independiente. La descompresión valida
+  todos los límites.
+- `spu/lz.c`: el programa SPU (un trabajador que comprime un bloque por
+  trabajo, ~150 KB de local store). Se embebe como cualquier ELF de SPU.
+- `spukit/lzstream.h`: lado PPE. `spukit_lzs_open(elf)` reserva un anillo de
+  ocho bloques y arranca el trabajador (con `NULL`, o si no arranca, se
+  comprime en el PPE); `spukit_lzs_run(z, src, len, sink, ctx, &stats)`
+  parte el búfer en bloques, el SPE comprime hasta ocho por delante y cada
+  bloque, con su encabezado, llega en orden a `sink` (que suele escribir a
+  disco desde un hilo de baja prioridad).
+
+```c
+spukit_lzs *z = spukit_lzs_open(spu_lz_bin);
+spukit_lzs_run(z, buf, len, escribir, ctx, &stats);   // buf alineado a 16
+```
+
+Mide: `stats.spu_ticks` (con `spukit_tick_hz()`), `sink_us`, `wall_us`.
+
 ## Recursos que usa
 
 - Un grupo de hilos SPU de un hilo por trabajador (prioridad 100).
@@ -118,4 +147,6 @@ La etiqueta DMA 31 es del bucle; el manejador usa las demás.
 ## Origen del código
 
 Código propio. Usa solo la API de PSL1GHT (MIT). No contiene código de
-proyectos GPL ni de proyectos sin licencia clara.
+proyectos GPL ni de proyectos sin licencia clara. El compresor sigue la
+especificación pública del formato de bloque de LZ4 (BSD-2-Clause); no usa
+fuentes de LZ4.

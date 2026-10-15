@@ -1,5 +1,9 @@
 # spukit
 
+> **English:** Batch jobs on the PlayStation 3's SPEs (a work queue in main memory with a mailbox doorbell, persistent workers, and LZ block compression on the PPE, the host and an SPE), for homebrew built with [PSL1GHT](https://github.com/ps3dev/PSL1GHT). MIT licensed. It was born inside [Salsa64](https://github.com/ricowp81/Salsa64), a Nintendo 64 emulator for the PS3, but knows nothing about any emulated system. The documentation below is in Spanish; the API is plain C. Third-party material: [THIRD_PARTY.md](THIRD_PARTY.md).
+>
+> Repositorio propio: [github.com/ricowp81/spukit](https://github.com/ricowp81/spukit). Salsa64 lo lleva en `lib/spukit` (git subtree) y los cambios se sincronizan en los dos sentidos.
+
 Trabajos por lotes en los SPEs de la PlayStation 3 con
 [PSL1GHT](https://github.com/ps3dev/PSL1GHT). Nació dentro de Salsa64 (un
 emulador de N64), pero no sabe nada de ningún sistema emulado: sirve a

@@ -110,6 +110,11 @@ The headers in `include/spukit/` are the API reference; their comments and
 
 Third-party material: see [THIRD_PARTY.md](THIRD_PARTY.md).
 
+## Support
+
+If spukit is useful to you, you can buy me a coffee at
+[buymeacoffee.com/ricowp81](https://buymeacoffee.com/ricowp81). Thanks!
+
 ## License
 
 MIT, see [LICENSE](LICENSE). Each source file carries
